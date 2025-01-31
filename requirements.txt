@@ -1,0 +1,14 @@
+langchain
+faiss-cpu
+dotenv
+docling
+langchain-text-splitters
+langchain-ollama
+langchain-community
+langchain-core
+ollama
+numpy
+openai
+pandas
+torch
+transformers
