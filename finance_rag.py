@@ -8,14 +8,16 @@ from langchain_ollama import OllamaEmbeddings
 import faiss
 from langchain_community.vectorstores import FAISS
 from langchain_community.docstore.in_memory import InMemoryDocstore
-from langchain import hub
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from langchain.agents import initialize_agent, AgentType
+from langchain.agents import load_tools
+from langchain.tools import Tool
 
 # Environment setup
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+os.environ['DUPLICATE_LIB_OK'] = 'True'
 warnings.filterwarnings("ignore")
 load_dotenv()
 
@@ -45,46 +47,46 @@ def setup_vector_store(chunks):
     vector_store.add_documents(documents=chunks)
     return vector_store
 
+# Function to retrieve context
+def retrieve_context(question, vector_store):
+    retriever = vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 3})
+    docs = retriever.get_relevant_documents(question)
+    return format_docs(docs)
+
 # Formatting documents for RAG
 def format_docs(docs):
     return "\n\n".join([doc.page_content for doc in docs])
 
-# Setting up the RAG chain
-def create_rag_chain(retriever):
-    prompt = """
-        You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question.
-        If you don't know the answer, just say that you don't know.
-        Answer in bullet points. Make sure your answer is relevant to the question and it is answered from the context only.
-        Question: {question} 
-        Context: {context} 
-        Answer:
-    """
-    model = ChatOllama(model="deepseek-r1:1.5b", base_url="http://localhost:11434")
-    prompt_template = ChatPromptTemplate.from_template(prompt)
-    return (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt_template
-        | model
-        | StrOutputParser()
+# Creating the agent
+def create_rag_agent(vector_store):
+    retrieval_tool = Tool(
+        name="Document Retrieval",
+        func=lambda query: retrieve_context(query, vector_store),
+        description="Use this tool to retrieve relevant context from documents."
     )
+    tools = load_tools(["llm-math"], llm=ChatOllama(model="deepseek-r1:1.5b", base_url="http://localhost:11434"))
+    tools.append(retrieval_tool)
+    
+    agent = initialize_agent(
+        tools=tools,
+        llm=ChatOllama(model="deepseek-r1:1.5b", base_url="http://localhost:11434"),
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True
+    )
+    return agent
+
+# Agentic RAG Chain
+def agentic_rag_chain(question, agent):
+    return agent.run(question)
 
 # Main execution logic
 if __name__ == "__main__":
-    # Load document
     source = "rag-dataset/goog-10-q-q3-2024.pdf"
     markdown_content = load_and_convert_document(source)
     chunks = get_markdown_splits(markdown_content)
-    
-    # Create vector store
     vector_store = setup_vector_store(chunks)
+    agent = create_rag_agent(vector_store)
     
-    # Setup retriever
-    retriever = vector_store.as_retriever(search_type="mmr", search_kwargs={'k': 3})
-
-    # Create RAG chain
-    rag_chain = create_rag_chain(retriever)
-    
-    # Questions for retrieval
     questions = [
         "How much revenue is there for Google?",
         "What is the net income for this quarter, and what are the key drivers contributing to its increase or decrease?",
@@ -93,9 +95,7 @@ if __name__ == "__main__":
         "How has the stock market reacted to this earnings report, and were there any notable comments from the CEO or CFO about future performance?"
     ]
     
-    # Answer questions
     for question in questions:
         print(f"Question: {question}")
-        for chunk in rag_chain.stream(question):
-            print(chunk, end="", flush=True)
+        print(agentic_rag_chain(question, agent))
         print("\n" + "-" * 50 + "\n")
